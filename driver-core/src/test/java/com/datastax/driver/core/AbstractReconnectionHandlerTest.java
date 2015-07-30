@@ -52,7 +52,7 @@ public class AbstractReconnectionHandlerTest {
         schedule = new MockReconnectionSchedule();
         work = new MockReconnectionWork();
         future.set(null);
-        handler = new AbstractReconnectionHandler(executor, schedule, future) {
+        handler = new AbstractReconnectionHandler("test", executor, schedule, future) {
             @Override
             protected Connection tryReconnect() throws ConnectionException, InterruptedException, UnsupportedProtocolVersionException, ClusterNameMismatchException {
                 return work.tryReconnect();
