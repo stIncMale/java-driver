@@ -330,7 +330,7 @@ public class AbstractReconnectionHandlerTest {
     private void waitForCompletion() {
         executor.shutdown();
         try {
-            boolean shutdown = executor.awaitTermination(10, TimeUnit.SECONDS);
+            boolean shutdown = executor.awaitTermination(30, TimeUnit.SECONDS);
             if (!shutdown)
                 fail("executor ran for longer than expected");
         } catch (InterruptedException e) {
