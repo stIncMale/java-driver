@@ -177,11 +177,16 @@ class HostConnectionPool implements Connection.Owner {
             if (!host.convictionPolicy.canReconnectNow())
                 throw new TimeoutException("Connection pool is empty, currently trying to reestablish connections");
             else {
-                for (int i = 0; i < options().getCoreConnectionsPerHost(hostDistance); i++) {
-                    // We don't respect MAX_SIMULTANEOUS_CREATION here because it's  only to
-                    // protect against creating connection in excess of core too quickly
-                    scheduledForCreation.incrementAndGet();
-                    manager.blockingExecutor().submit(newConnectionTask);
+                int coreSize = options().getCoreConnectionsPerHost(hostDistance);
+                if (coreSize == 0) {
+                    maybeSpawnNewConnection();
+                } else {
+                    for (int i = 0; i < coreSize; i++) {
+                        // We don't respect MAX_SIMULTANEOUS_CREATION here because it's  only to
+                        // protect against creating connection in excess of core too quickly
+                        scheduledForCreation.incrementAndGet();
+                        manager.blockingExecutor().submit(newConnectionTask);
+                    }
                 }
                 Connection c = waitForConnection(timeout, unit);
                 totalInFlight.incrementAndGet();
