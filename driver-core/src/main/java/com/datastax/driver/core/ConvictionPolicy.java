@@ -15,7 +15,11 @@
  */
 package com.datastax.driver.core;
 
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 import com.datastax.driver.core.policies.ReconnectionPolicy;
 
@@ -115,7 +119,7 @@ abstract class ConvictionPolicy {
         }
 
         private synchronized void updateReconnectionTime() {
-            long now = System.currentTimeMillis();
+            long now = System.nanoTime();
             if (nextReconnectionTime > now)
                 // Someone else updated the time before us
                 return;
@@ -125,7 +129,7 @@ abstract class ConvictionPolicy {
 
             long nextDelayMs = reconnectionSchedule.nextDelayMs();
             Host.statesLogger.debug("[{}] preventing new connections for the next {} ms", host, nextDelayMs);
-            nextReconnectionTime = now + nextDelayMs;
+            nextReconnectionTime = now + NANOSECONDS.convert(nextDelayMs, MILLISECONDS);
         }
 
         private synchronized void resetReconnectionTime() {
@@ -135,7 +139,8 @@ abstract class ConvictionPolicy {
 
         @Override
         boolean canReconnectNow() {
-            return System.currentTimeMillis() >= nextReconnectionTime;
+            return nextReconnectionTime == Long.MIN_VALUE ||
+                System.nanoTime() >= nextReconnectionTime;
         }
 
         @Override
