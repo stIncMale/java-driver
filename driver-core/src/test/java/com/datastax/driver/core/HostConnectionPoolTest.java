@@ -19,6 +19,7 @@ import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -64,24 +65,21 @@ public class HostConnectionPoolTest extends ScassandraTestBase.PerClassCluster {
      * @test_category connection:connection_pool
      */
     @Test(groups = "short")
-    public void fixed_size_pool_should_fill_its_core_connections_and_then_timeout() throws ConnectionException, TimeoutException {
+    public void fixed_size_pool_should_fill_its_core_connections_and_then_timeout() throws ConnectionException, TimeoutException, BusyConnectionException {
         HostConnectionPool pool = createPool(2, 2);
 
         assertThat(pool.connections.size()).isEqualTo(2);
         List<Connection> coreConnections = newArrayList(pool.connections);
 
         for (int i = 0; i < 256; i++) {
-            Connection connection = pool.borrowConnection(100, MILLISECONDS);
-            assertThat(coreConnections).contains(connection);
+            MockRequest request = MockRequest.send(pool);
+            assertThat(coreConnections).contains(request.connection);
         }
 
-        boolean timedOut = false;
         try {
-            pool.borrowConnection(100, MILLISECONDS);
-        } catch (TimeoutException e) {
-            timedOut = true;
-        }
-        assertThat(timedOut).isTrue();
+            MockRequest.send(pool);
+            Assertions.fail("Expected a TimeoutException");
+        } catch (TimeoutException e) { /*expected*/}
     }
 
     /**
@@ -692,5 +690,66 @@ public class HostConnectionPoolTest extends ScassandraTestBase.PerClassCluster {
             .build();
         primingClient.prime(preparedStatementPrime);
         return sb.toString();
+    }
+
+    /** Mock ResponseCallback that simulates the behavior of SpeculativeExecution (in terms of borrowing/releasing connections). */
+    static class MockRequest implements Connection.ResponseCallback {
+
+        enum State { START, COMPLETED, FAILED, TIMED_OUT }
+
+        final Connection connection;
+        private final Connection.ResponseHandler responseHandler;
+
+        private final AtomicReference<State> state = new AtomicReference<State>(State.START);
+
+        static MockRequest send(HostConnectionPool pool) throws ConnectionException, BusyConnectionException, TimeoutException {
+            return new MockRequest(pool);
+        }
+
+        private MockRequest(HostConnectionPool pool) throws ConnectionException, TimeoutException, BusyConnectionException {
+            connection = pool.borrowConnection(500, TimeUnit.MILLISECONDS);
+            responseHandler = new Connection.ResponseHandler(connection, this);
+            connection.dispatcher.add(responseHandler);
+        }
+
+        void simulateSuccessResponse() {
+            onSet(connection, null, 0, 0);
+        }
+
+        void simulateErrorResponse() {
+            onException(connection, null, 0, 0);
+        }
+
+        void simulateTimeout() {
+            if (onTimeout(connection, 0, 0))
+                responseHandler.cancelHandler();
+        }
+
+        @Override
+        public void onSet(Connection connection, Message.Response response, long latency, int retryCount) {
+            if (state.compareAndSet(State.START, State.COMPLETED))
+                connection.release();
+        }
+
+        @Override
+        public void onException(Connection connection, Exception exception, long latency, int retryCount) {
+            if (state.compareAndSet(State.START, State.FAILED))
+                connection.release();
+        }
+
+        @Override
+        public boolean onTimeout(Connection connection, long latency, int retryCount) {
+            return state.compareAndSet(State.START, State.TIMED_OUT);
+        }
+
+        @Override
+        public Message.Request request() {
+            return null; // not needed for this test class
+        }
+
+        @Override
+        public int retryCount() {
+            return 0; // value not important for this test class
+        }
     }
 }
