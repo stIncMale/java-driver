@@ -15,7 +15,7 @@
  */
 package com.datastax.driver.core;
 
-import java.util.Collection;
+import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -24,23 +24,35 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 import com.codahale.metrics.Gauge;
-import com.google.common.collect.Lists;
+import com.google.common.util.concurrent.Uninterruptibles;
+import org.assertj.core.api.Condition;
+import org.scassandra.cql.PrimitiveType;
+import org.scassandra.http.client.PrimingRequest;
+import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.spy;
+import static com.google.common.collect.Lists.newArrayList;
+import static org.mockito.Mockito.*;
+import static org.scassandra.http.client.ConnectionsClient.CloseType.CLOSE;
 import static org.testng.Assert.fail;
 
-public class HostConnectionPoolTest extends CCMBridge.PerClassSingleNodeCluster {
-    @Override
-    protected Collection<String> getTableDefinitions() {
-        StringBuilder sb = new StringBuilder("CREATE TABLE Java349 (mykey INT primary key");
-        for (int i = 0; i < 1000; i++) {
-            sb.append(", column").append(i).append(" INT");
+import com.datastax.driver.core.policies.ConstantReconnectionPolicy;
+
+import static com.datastax.driver.core.Assertions.assertThat;
+
+public class HostConnectionPoolTest extends ScassandraTestBase.PerClassCluster {
+
+
+    @BeforeMethod(groups={"short", "long"})
+    public void reinitializeCluster() {
+        cluster.close();
+        try {
+            cluster = createClusterBuilder().build();
+            session = cluster.connect();
+        } catch(Exception e) {
+            cluster.close();
+            fail("Error recreating cluster", e);
         }
-        sb.append(")");
-        return Lists.newArrayList(sb.toString());
     }
 
     /**
@@ -56,7 +68,7 @@ public class HostConnectionPoolTest extends CCMBridge.PerClassSingleNodeCluster 
         HostConnectionPool pool = createPool(2, 2);
 
         assertThat(pool.connections.size()).isEqualTo(2);
-        List<Connection> coreConnections = Lists.newArrayList(pool.connections);
+        List<Connection> coreConnections = newArrayList(pool.connections);
 
         for (int i = 0; i < 256; i++) {
             Connection connection = pool.borrowConnection(100, MILLISECONDS);
@@ -85,7 +97,7 @@ public class HostConnectionPoolTest extends CCMBridge.PerClassSingleNodeCluster 
         HostConnectionPool pool = createPool(1, 2);
 
         assertThat(pool.connections.size()).isEqualTo(1);
-        List<Connection> coreConnections = Lists.newArrayList(pool.connections);
+        List<Connection> coreConnections = newArrayList(pool.connections);
 
         //
         for (int i = 0; i < 128; i++) {
@@ -344,13 +356,266 @@ public class HostConnectionPoolTest extends CCMBridge.PerClassSingleNodeCluster 
         assertThat(pool.connections).hasSize(1);
     }
 
+    /**
+     * Ensures that if a connection on a host is lost but other connections remain intact in the Pool that the
+     * host is not marked down.
+     *
+     * @jira_ticket JAVA-544
+     * @test_category connection:connection_pool
+     * @since 2.0.11
+     */
+    @Test(groups="short")
+    public void should_keep_host_up_when_connection_lost() {
+        HostConnectionPool pool = createPool(2, 2);
+        Connection core0 = pool.connections.get(0);
+        Connection core1 = pool.connections.get(1);
+
+        // Drop a connection and ensure the host stays up.
+        serverClient.disableListener();
+        connectionsClient.closeConnection(CLOSE, ((InetSocketAddress)core0.channel.localAddress()));
+
+        // connection 0 should be down, while connection 1 and the Host should remain up.
+        assertThat(core0.isClosed()).isTrue();
+        assertThat(core1.isClosed()).isFalse();
+        assertThat(pool.connections).doesNotContain(core0);
+        assertThat(cluster).host(1).hasState(Host.State.UP);
+    }
+
+
+    /**
+     * Ensures that if all connections on a host are closed that the host is marked
+     * down and the control connection is notified of that fact and re-established
+     * itself.
+     *
+     * @jira_ticket JAVA-544
+     * @test_category connection:connection_pool
+     * @since 2.0.11
+     */
+    @Test(groups="short")
+    public void should_mark_host_down_when_no_connections_remaining() {
+        Cluster cluster = this.createClusterBuilder().build();
+        try {
+            cluster.init();
+            HostConnectionPool pool = createPool(cluster, 8,8);
+            // copy list to track these connections.
+            List<Connection> connections = newArrayList(pool.connections);
+
+            // Drop all connections.
+            serverClient.disableListener();
+            connectionsClient.closeConnections(CLOSE, host.getAddress());
+
+            // Ensure all connections are closed.
+            assertThat(connections).are(new Condition<Connection>() {
+
+                @Override
+                public boolean matches(Connection connection) {
+                    return connection.isClosed();
+                }
+            });
+            // The host should be marked down
+            assertThat(cluster).host(1).hasState(Host.State.DOWN);
+
+            // TODO validate control connection closed and eventually reconnects
+            // when it can connect.
+        } finally {
+            cluster.close();
+        }
+    }
+
+
+    /**
+     * Ensures that if a connection on a host is lost that brings the number of active connections in a pool
+     * under core connection count that up to core connections are re-established, but only after the
+     * next reconnect schedule has elapsed.
+     *
+     * @jira_ticket JAVA-544
+     * @test_category connection:connection_pool
+     * @since 2.0.11
+     */
+    @Test(groups="short")
+    public void should_create_new_connections_when_connection_lost_and_under_core_connections() throws Exception {
+        int readTimeout = 1000;
+        int reconnectInterval = 1000;
+        Cluster cluster = this.createClusterBuilder()
+            .withSocketOptions(new SocketOptions()
+                .setConnectTimeoutMillis(readTimeout)
+                .setReadTimeoutMillis(reconnectInterval))
+            .withReconnectionPolicy(new ConstantReconnectionPolicy(1000)).build();
+        try {
+            cluster.init();
+
+            Connection.Factory factory = spy(cluster.manager.connectionFactory);
+            cluster.manager.connectionFactory = factory;
+
+            HostConnectionPool pool = createPool(cluster, 3, 3);
+            Connection core0 = pool.connections.get(0);
+            Connection core1 = pool.connections.get(1);
+            Connection core2 = pool.connections.get(2);
+
+            // Drop two core connections.
+            // Disable new connections initially and we'll eventually reenable it.
+            serverClient.disableListener();
+            connectionsClient.closeConnection(CLOSE, ((InetSocketAddress)core0.channel.localAddress()));
+            connectionsClient.closeConnection(CLOSE, ((InetSocketAddress)core2.channel.localAddress()));
+
+            // Since we have a connection left the host should remain up.
+            assertThat(cluster).host(1).hasState(Host.State.UP);
+            assertThat(pool.connections).hasSize(1);
+
+            // The borrowed connection should be the open one.
+            Connection borrowed = pool.borrowConnection(500, TimeUnit.MILLISECONDS);
+            assertThat(borrowed).isEqualTo(core1);
+
+            // Should not have tried to create a new core connection since reconnection time had not elapsed.
+            verify(factory, never()).open(any(HostConnectionPool.class));
+
+            // Sleep to elapse the Reconnection Policy.
+            Uninterruptibles.sleepUninterruptibly(reconnectInterval, TimeUnit.MILLISECONDS);
+
+            // Attempt to borrow connection, this should trigger ensureCoreConnections thus spawning a new connection.
+            borrowed = pool.borrowConnection(500, TimeUnit.MILLISECONDS);
+            assertThat(borrowed).isEqualTo(core1);
+
+            // Should have tried to open up to core connections as result of borrowing a connection past reconnect time and not being at core.
+            verify(factory, timeout(reconnectInterval).times(1)).open(any(HostConnectionPool.class));
+
+            // Sleep as the reconnect timer should have been reset when connections fail.
+            Uninterruptibles.sleepUninterruptibly(readTimeout, TimeUnit.MILLISECONDS);
+
+            // Enable listening so new connections succeed.
+            serverClient.enableListener();
+            // Sleep to elapse the Reconnection Policy.
+            Uninterruptibles.sleepUninterruptibly(reconnectInterval, TimeUnit.MILLISECONDS);
+
+            // Try to borrow a connection, since listening is now enabled the spun up connection task should succeed and the pool should grow.
+            pool.borrowConnection(500, TimeUnit.MILLISECONDS);
+            verify(factory, timeout(readTimeout).times(2)).open(any(HostConnectionPool.class));
+
+            // Wait some reasonable amount of time for connection to reestablish then check pool size.
+            Uninterruptibles.sleepUninterruptibly(readTimeout, TimeUnit.MILLISECONDS);
+            assertThat(pool.connections).hasSize(3);
+
+            // Borrowed connection should be a newly spawned connection since the other one has some inflight requests.
+            borrowed = pool.borrowConnection(500, TimeUnit.MILLISECONDS);
+            assertThat(borrowed).isNotEqualTo(core0).isNotEqualTo(core1).isNotEqualTo(core2);
+        } finally {
+            cluster.close();
+        }
+    }
+
+    /**
+     * Ensures that if a connection on a host is lost and the number of remaining connections is at
+     * core connection count that no connections are re-established until after there are enough
+     * inflight requests to justify creating one and the reconnection interval has elapsed.
+     *
+     * @jira_ticket JAVA-544
+     * @test_category connection:connection_pool
+     * @since 2.0.11
+     */
+    @Test(groups = "short")
+    public void should_not_schedule_reconnect_when_connection_lost_and_at_core_connections() throws Exception {
+        int readTimeout = 1000;
+        int reconnectInterval = 1000;
+        Cluster cluster = this.createClusterBuilder()
+            .withSocketOptions(new SocketOptions()
+                .setConnectTimeoutMillis(readTimeout)
+                .setReadTimeoutMillis(reconnectInterval))
+            .withReconnectionPolicy(new ConstantReconnectionPolicy(1000)).build();
+        try {
+            cluster.init();
+
+            Connection.Factory factory = spy(cluster.manager.connectionFactory);
+            cluster.manager.connectionFactory = factory;
+
+            HostConnectionPool pool = createPool(cluster, 1, 2);
+            Connection core0 = pool.connections.get(0);
+
+            // Create enough inFlight requests to spawn another connection.
+            for (int i = 0; i < 101; i++)
+                assertThat(pool.borrowConnection(100, MILLISECONDS)).isEqualTo(core0);
+
+            TimeUnit.MILLISECONDS.sleep(100);
+            assertThat(pool.connections).hasSize(2);
+
+            // Reset factory mock as we'll be checking for new open() invokes later.
+            reset(factory);
+
+            // Grab the new non-core connection.
+            Connection extra1 = pool.connections.get(1);
+
+            // Drop a connection and disable listening.
+            connectionsClient.closeConnection(CLOSE, ((InetSocketAddress)core0.channel.localAddress()));
+            serverClient.disableListener();
+            // Lets return connection all inFlight connections for that closed host since the requests
+            // would fail when connection is closed and thus decrement.
+            while (core0.inFlight.get() > 0)
+                pool.returnConnection(core0);
+
+            assertThat(cluster).host(1).hasState(Host.State.UP);
+
+            // The borrowed connection should be the open one that should not be core.
+            Connection borrowed = pool.borrowConnection(500, TimeUnit.MILLISECONDS);
+            assertThat(borrowed).isEqualTo(extra1);
+            assertThat(pool.connections).hasSize(1);
+
+
+            // Create enough inFlight requests to fill connection.
+            while(extra1.inFlight.get() < 100) {
+                assertThat(pool.borrowConnection(100, MILLISECONDS)).isEqualTo(extra1);
+            }
+
+            // A new connection should never have been spawned since we didn't max out core.
+            verify(factory, after(readTimeout).never()).open(any(HostConnectionPool.class));
+
+            // Borrow another connection, since we exceed max another connection should be opened.
+            borrowed = pool.borrowConnection(500, TimeUnit.MILLISECONDS);
+            assertThat(borrowed).isEqualTo(extra1);
+
+            // After some time the a connection should attempt to be opened (but will fail).
+            verify(factory, timeout(readTimeout)).open(any(HostConnectionPool.class));
+            assertThat(pool.connections).hasSize(1);
+
+            // Wait some reasonable amount of time for connection to reestablish then check pool size.
+            Uninterruptibles.sleepUninterruptibly(readTimeout * 2, TimeUnit.MILLISECONDS);
+            // Reconnecting failed since listening was enabled.
+            assertThat(pool.connections).hasSize(1);
+
+            // Re enable listening then wait for reconnect.
+            serverClient.enableListener();
+            Uninterruptibles.sleepUninterruptibly(reconnectInterval, TimeUnit.MILLISECONDS);
+
+            // Borrow another connection, since we exceed max another connection should be opened.
+            borrowed = pool.borrowConnection(500, TimeUnit.MILLISECONDS);
+            assertThat(borrowed).isEqualTo(extra1);
+
+            // Wait some reasonable amount of time for connection to reestablish then check pool size.
+            Uninterruptibles.sleepUninterruptibly(readTimeout, TimeUnit.MILLISECONDS);
+            // Reconnecting should have exceeded and pool will have grown.
+            assertThat(pool.connections).hasSize(2);
+
+            // Borrowed connection should be the newly spawned connection since the other one has some inflight requests.
+            borrowed = pool.borrowConnection(500, TimeUnit.MILLISECONDS);
+            assertThat(borrowed).isNotEqualTo(core0).isNotEqualTo(extra1);
+        } finally {
+            cluster.close();
+        }
+    }
+
     private HostConnectionPool createPool(int coreConnections, int maxConnections) {
+        return createPool(cluster, coreConnections, maxConnections);
+    }
+
+    private HostConnectionPool createPool(Cluster cluster, int coreConnections, int maxConnections) {
         cluster.getConfiguration().getPoolingOptions()
-            .setCoreConnectionsPerHost(HostDistance.LOCAL, coreConnections)
-            .setMaxConnectionsPerHost(HostDistance.LOCAL, maxConnections);
+            .setMaxConnectionsPerHost(HostDistance.LOCAL, maxConnections)
+            .setCoreConnectionsPerHost(HostDistance.LOCAL, coreConnections);
         Session session = cluster.connect();
         Host host = TestUtils.findHost(cluster, 1);
-        return ((SessionManager)session).pools.get(host);
+
+        // Replace the existing pool with a spy pool and return it.
+        SessionManager sm = ((SessionManager)session);
+        HostConnectionPool pool = sm.pools.get(host);
+        return pool;
     }
 
     /**
@@ -396,7 +661,8 @@ public class HostConnectionPoolTest extends CCMBridge.PerClassSingleNodeCluster 
         // Insert 100k lines in a newly created 1k columns table
         PreparedStatement insertStatement = session.prepare(generateJava349InsertStatement());
         for (int key = 0; key < numberOfInserts; key++) {
-            session.executeAsync(insertStatement.bind(key)).addListener(progressReporter, progressReportExecutor);
+            ResultSetFuture future = session.executeAsync(insertStatement.bind(key));
+            future.addListener(progressReporter, progressReportExecutor);
         }
 
         // Wait for all inserts to happen and stop connections and progress tracking
@@ -419,6 +685,12 @@ public class HostConnectionPoolTest extends CCMBridge.PerClassSingleNodeCluster 
             sb.append(", ").append(i);
         }
         sb.append(");");
+
+        PrimingRequest preparedStatementPrime = PrimingRequest.preparedStatementBuilder()
+            .withQuery(sb.toString())
+            .withVariableTypes(PrimitiveType.INT)
+            .build();
+        primingClient.prime(preparedStatementPrime);
         return sb.toString();
     }
 }
