@@ -56,6 +56,8 @@ abstract class SchemaParser {
                      Connection connection, VersionNumber cassandraVersion)
             throws ConnectionException, BusyConnectionException, ExecutionException, InterruptedException {
 
+            /*
+
             boolean isSchemaOrKeyspace = (targetType == null || targetType == KEYSPACE);
             ProtocolVersion protocolVersion = metadata.cluster.protocolVersion();
             CodecRegistry codecRegistry = metadata.cluster.configuration.getCodecRegistry();
@@ -174,6 +176,8 @@ abstract class SchemaParser {
             } finally {
                 metadata.lock.unlock();
             }
+
+            */
         }
 
         private boolean supportsUdts(VersionNumber cassandraVersion) {
@@ -202,6 +206,8 @@ abstract class SchemaParser {
                      SchemaElement targetType, String targetKeyspace, String targetName, List<String> targetSignature,
                      Connection connection, VersionNumber cassandraVersion)
             throws ConnectionException, BusyConnectionException, ExecutionException, InterruptedException {
+
+            /*
 
             boolean isSchemaOrKeyspace = (targetType == null || targetType == KEYSPACE);
             ProtocolVersion protocolVersion = metadata.cluster.protocolVersion();
@@ -321,6 +327,8 @@ abstract class SchemaParser {
             } finally {
                 metadata.lock.unlock();
             }
+
+            */
         }
     };
 
