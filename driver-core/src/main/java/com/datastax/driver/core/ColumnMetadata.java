@@ -178,7 +178,7 @@ public class ColumnMetadata {
             this.isReversed = isReversed;
         }
 
-        static Raw fromRow(Row row, VersionNumber version, ProtocolVersion protocolVersion, CodecRegistry codecRegistry) {
+        static Raw fromRow(Row row, VersionNumber version, Cluster cluster) {
             String name = row.getString(COLUMN_NAME);
 
             Kind kind;
@@ -198,17 +198,20 @@ public class ColumnMetadata {
                 position = row.isNull(COMPONENT_INDEX) ? 0 : row.getInt(COMPONENT_INDEX);
             }
 
-            String dataTypeStr;
+            DataType dataType;
             boolean reversed;
             if(version.getMajor() >= 3) {
-                dataTypeStr = row.getString(TYPE);
+                String dataTypeStr = row.getString(TYPE);
+                dataType = DataTypeParser.parse(dataTypeStr, cluster.getMetadata());
                 String clusteringOrderStr = row.getString(CLUSTERING_ORDER);
                 reversed = clusteringOrderStr.equals(DESC);
             } else {
-                dataTypeStr = row.getString(VALIDATOR);
+                String dataTypeStr = row.getString(VALIDATOR);
+                ProtocolVersion protocolVersion = cluster.getConfiguration().getProtocolOptions().getProtocolVersion();
+                CodecRegistry codecRegistry = cluster.getConfiguration().getCodecRegistry();
+                dataType = CassandraTypeParser.parseOne(dataTypeStr, protocolVersion, codecRegistry);
                 reversed = CassandraTypeParser.isReversed(dataTypeStr);
             }
-            DataType dataType = CassandraTypeParser.parseOne(dataTypeStr, protocolVersion, codecRegistry);
 
             Raw c = new Raw(name, kind, position, dataType, reversed);
 

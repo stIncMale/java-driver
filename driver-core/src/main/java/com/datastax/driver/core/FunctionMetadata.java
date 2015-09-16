@@ -70,26 +70,35 @@ public class FunctionMetadata {
     //     return_type text,
     //     PRIMARY KEY (keyspace_name, function_name, signature)
     // ) WITH CLUSTERING ORDER BY (function_name ASC, signature ASC)
-    static FunctionMetadata build(KeyspaceMetadata ksm, Row row, ProtocolVersion protocolVersion, CodecRegistry codecRegistry) {
+    static FunctionMetadata build(KeyspaceMetadata ksm, Row row, VersionNumber version, Cluster cluster) {
+        CodecRegistry codecRegistry = cluster.getConfiguration().getCodecRegistry();
+        ProtocolVersion protocolVersion = cluster.getConfiguration().getProtocolOptions().getProtocolVersion();
         String simpleName = row.getString("function_name");
         List<String> signature = row.getList("signature", String.class);
         String fullName = Metadata.fullFunctionName(simpleName, signature);
-
         List<String> argumentNames = row.getList("argument_names", String.class);
-        List<String> argumentTypes = row.getList("argument_types", String.class);
-        if (argumentNames.size() != argumentTypes.size()) {
+        if (argumentNames.size() != signature.size()) {
             logger.error(String.format("Error parsing definition of function %1$s.%2$s: the number of argument names and types don't match."
                     + "Cluster.getMetadata().getKeyspace(\"%1$s\").getFunction(\"%2$s\") will be missing.",
                 ksm.getName(), fullName));
             return null;
         }
-        Map<String, DataType> arguments = buildArguments(argumentNames, argumentTypes, protocolVersion, codecRegistry);
-
+        Map<String, DataType> arguments;
+        if(version.getMajor() >= 3) {
+            arguments = buildArgumentsV3(argumentNames, signature, cluster.getMetadata());
+        } else {
+            List<String> argumentTypes = row.getList("argument_types", String.class);
+            arguments = buildArgumentsV2(argumentNames, argumentTypes, protocolVersion, codecRegistry);
+        }
         String body = row.getString("body");
         boolean calledOnNullInput = row.getBool("called_on_null_input");
         String language = row.getString("language");
-        DataType returnType = CassandraTypeParser.parseOne(row.getString("return_type"), protocolVersion, codecRegistry);
-
+        DataType returnType;
+        if(version.getMajor() >= 3) {
+            returnType = DataTypeParser.parse(row.getString("return_type"), cluster.getMetadata());
+        } else {
+            returnType = CassandraTypeParser.parseOne(row.getString("return_type"), protocolVersion, codecRegistry);
+        }
         FunctionMetadata function = new FunctionMetadata(ksm, fullName, simpleName, arguments, body,
             calledOnNullInput, language, returnType);
         ksm.add(function);
@@ -97,7 +106,7 @@ public class FunctionMetadata {
     }
 
     // Note: the caller ensures that names and types have the same size
-    private static Map<String, DataType> buildArguments(List<String> names, List<String> types, ProtocolVersion protocolVersion, CodecRegistry codecRegistry) {
+    private static Map<String, DataType> buildArgumentsV2(List<String> names, List<String> types, ProtocolVersion protocolVersion, CodecRegistry codecRegistry) {
         if (names.isEmpty())
             return Collections.emptyMap();
 
@@ -105,6 +114,20 @@ public class FunctionMetadata {
         Iterator<String> iterTypes = types.iterator();
         for (String name : names) {
             DataType type = CassandraTypeParser.parseOne(iterTypes.next(), protocolVersion, codecRegistry);
+            builder.put(name, type);
+        }
+        return builder.build();
+    }
+
+    // Note: the caller ensures that names and types have the same size
+    private static Map<String, DataType> buildArgumentsV3(List<String> names, List<String> types, Metadata metadata) {
+        if (names.isEmpty())
+            return Collections.emptyMap();
+
+        ImmutableMap.Builder<String, DataType> builder = ImmutableMap.builder();
+        Iterator<String> iterTypes = types.iterator();
+        for (String name : names) {
+            DataType type = DataTypeParser.parse(iterTypes.next(), metadata);
             builder.put(name, type);
         }
         return builder.build();

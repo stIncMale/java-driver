@@ -70,16 +70,33 @@ public class AggregateMetadata {
     //     state_type text,
     //     PRIMARY KEY (keyspace_name, aggregate_name, signature)
     // ) WITH CLUSTERING ORDER BY (aggregate_name ASC, signature ASC)
-    static AggregateMetadata build(KeyspaceMetadata ksm, Row row, ProtocolVersion protocolVersion, CodecRegistry codecRegistry) {
+    static AggregateMetadata build(KeyspaceMetadata ksm, Row row, VersionNumber version, Cluster cluster) {
+        CodecRegistry codecRegistry = cluster.getConfiguration().getCodecRegistry();
+        ProtocolVersion protocolVersion = cluster.getConfiguration().getProtocolOptions().getProtocolVersion();
         String simpleName = row.getString("aggregate_name");
         List<String> signature = row.getList("signature", String.class);
         String fullName = Metadata.fullFunctionName(simpleName, signature);
-        List<DataType> argumentTypes = parseTypes(row.getList("argument_types", String.class), protocolVersion, codecRegistry);
+        List<DataType> argumentTypes;
+        if(version.getMajor() >= 3) {
+            argumentTypes = parseTypes(signature, version, cluster);
+        } else {
+            argumentTypes = parseTypes(row.getList("argument_types", String.class), version, cluster);
+        }
         String finalFuncSimpleName = row.getString("final_func");
-        DataType returnType = CassandraTypeParser.parseOne(row.getString("return_type"), protocolVersion, codecRegistry);
+        DataType returnType;
+        if(version.getMajor() >= 3) {
+            returnType = DataTypeParser.parse(row.getString("return_type"), cluster.getMetadata());
+        } else {
+            returnType = CassandraTypeParser.parseOne(row.getString("return_type"), protocolVersion, codecRegistry);
+        }
         String stateFuncSimpleName = row.getString("state_func");
         String stateTypeName = row.getString("state_type");
-        DataType stateType = CassandraTypeParser.parseOne(stateTypeName, protocolVersion, codecRegistry);
+        DataType stateType;
+        if(version.getMajor() >= 3) {
+            stateType = DataTypeParser.parse(stateTypeName, cluster.getMetadata());
+        } else {
+            stateType = CassandraTypeParser.parseOne(stateTypeName, protocolVersion, codecRegistry);
+        }
         ByteBuffer rawInitCond = row.getBytes("initcond");
         Object initCond = rawInitCond == null ? null : codecRegistry.codecFor(stateType).deserialize(rawInitCond, protocolVersion);
 
@@ -99,13 +116,21 @@ public class AggregateMetadata {
         return Metadata.fullFunctionName(stateFuncSimpleName, args);
     }
 
-    private static List<DataType> parseTypes(List<String> names, ProtocolVersion protocolVersion, CodecRegistry codecRegistry) {
-        if (names.isEmpty())
+    private static List<DataType> parseTypes(List<String> types, VersionNumber version, Cluster cluster) {
+        if (types.isEmpty())
             return Collections.emptyList();
 
+        Metadata metadata = cluster.getMetadata();
+        CodecRegistry codecRegistry = cluster.getConfiguration().getCodecRegistry();
+        ProtocolVersion protocolVersion = cluster.getConfiguration().getProtocolOptions().getProtocolVersion();
         ImmutableList.Builder<DataType> builder = ImmutableList.builder();
-        for (String name : names) {
-            DataType type = CassandraTypeParser.parseOne(name, protocolVersion, codecRegistry);
+        for (String name : types) {
+            DataType type;
+            if (version.getMajor() >= 3) {
+                type = DataTypeParser.parse(name, metadata);
+            } else {
+                type = CassandraTypeParser.parseOne(name, protocolVersion, codecRegistry);
+            }
             builder.add(type);
         }
         return builder.build();
