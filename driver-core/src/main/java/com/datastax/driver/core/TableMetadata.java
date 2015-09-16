@@ -15,10 +15,8 @@
  */
 package com.datastax.driver.core;
 
-
 import java.util.*;
 
-import com.google.common.base.*;
 import com.google.common.base.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,7 +48,7 @@ public class TableMetadata extends TableOrView {
     private static final String SUPER                = "super";
     private static final String COMPOUND             = "compound";
 
-    private static final String EMPTY_TYPE           = "org.apache.cassandra.db.marshal.EmptyType";
+    private static final String EMPTY_TYPE           = "empty";
 
     private final Map<String, IndexMetadata> indexes;
 
@@ -71,7 +69,7 @@ public class TableMetadata extends TableOrView {
         this.views = new HashMap<String, MaterializedViewMetadata>();
     }
 
-    static TableMetadata build(KeyspaceMetadata ksm, Row row, Map<String, ColumnMetadata.Raw> rawCols, List<Row> indexRows, String nameColumn, VersionNumber cassandraVersion, ProtocolVersion protocolVersion, CodecRegistry codecRegistry) {
+    static TableMetadata build(KeyspaceMetadata ksm, Row row, Map<String, ColumnMetadata.Raw> rawCols, List<Row> indexRows, String nameColumn, VersionNumber cassandraVersion, Cluster cluster) {
 
         String name = row.getString(nameColumn);
 
@@ -85,6 +83,9 @@ public class TableMetadata extends TableOrView {
         CassandraTypeParser.ParseResult comparator = null;
         CassandraTypeParser.ParseResult keyValidator = null;
         List<String> columnAliases = null;
+
+        ProtocolVersion protocolVersion = cluster.getConfiguration().getProtocolOptions().getProtocolVersion();
+        CodecRegistry codecRegistry = cluster.getConfiguration().getCodecRegistry();
 
         if (cassandraVersion.getMajor() <= 2) {
             comparator = CassandraTypeParser.parseWithComposite(row.getString(COMPARATOR), protocolVersion, codecRegistry);
@@ -252,7 +253,9 @@ public class TableMetadata extends TableOrView {
         Iterator<ColumnMetadata.Raw> it = cols.iterator();
         while(it.hasNext()) {
             ColumnMetadata.Raw col = it.next();
-            if(col.kind == ColumnMetadata.Raw.Kind.REGULAR && col.dataType instanceof DataType.CustomType && EMPTY_TYPE.equals(((DataType.CustomType)col.dataType).getCustomTypeClassName())) {
+            if (col.kind == ColumnMetadata.Raw.Kind.REGULAR
+                && col.dataType instanceof DataType.CustomType
+                && ((DataType.CustomType)col.dataType).getCustomTypeClassName().equals(EMPTY_TYPE)) {
                 // remove "value EmptyType" regular column
                 it.remove();
             }
