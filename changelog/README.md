@@ -1,5 +1,11 @@
 ## Changelog
 
+### 3.0.0-beta1 [in progress]
+
+- [improvement] Improve error handling for when a non-type 1 UUID is given to 
+  bind() on a timeuuid column (JAVA-965)
+
+
 ### 3.0.0-alpha4
 
 - [improvement] Change default consistency level to LOCAL_QUORUM (JAVA-926)

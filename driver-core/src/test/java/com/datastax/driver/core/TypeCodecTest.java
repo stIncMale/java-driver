@@ -251,6 +251,35 @@ public class TypeCodecTest {
         assertThat(actual).isEqualTo(expected);
     }
 
+    /**
+     * Ensures that {@link TypeCodec#timeUUID()} is resolved for all UUIDs and throws an
+     * {@link InvalidTypeException} when attempting to serialize or format a non-type 1
+     * UUID.
+     *
+     * @jira_ticket JAVA-965
+     */
+    @Test(groups = "unit")
+    public void should_resolve_timeuuid_codec_for_all_uuids_and_fail_to_serialize_non_type1_uuid() {
+        UUID type4UUID = UUID.randomUUID();
+        TypeCodec<UUID> codec = codecRegistry.codecFor(DataType.timeuuid(), type4UUID);
+        // Should resolve the TimeUUIDCodec.
+        assertThat(codec).isSameAs(TypeCodec.timeUUID());
+
+        try {
+            codec.serialize(type4UUID, ProtocolVersion.NEWEST_SUPPORTED);
+            fail("Should not have been able to serialize a non type 1 uuid.");
+        } catch (InvalidTypeException ite) {
+            // expected
+        }
+
+        try {
+            codec.format(type4UUID);
+            fail("Should not have been able to format a non type 1 uuid.");
+        } catch (InvalidTypeException ite) {
+            // expected.
+        }
+    }
+
 
     private class ListVarcharToListListInteger extends TypeCodec<List<List<Integer>>> {
 

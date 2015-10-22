@@ -1771,7 +1771,7 @@ public abstract class TypeCodec<T> {
         @Override
         public boolean accepts(Object value) {
             // only accept time-based uuids
-            return super.accepts(value) && ((UUID)value).version() == 1;
+            return super.accepts(value);
         }
 
         @Override
