@@ -154,28 +154,6 @@ public final class CodecRegistry {
 
     private static final Logger logger = LoggerFactory.getLogger(CodecRegistry.class);
 
-    static {
-        // Ensure that a TypeToken for Map<String,String> can be created.  If not it is likely that
-        // an older version of guava is in use.  Log a warning in this case so users may be aware
-        // that they need to upgrade their guava version to avoid codec resolution errors.
-        boolean resolved = false;
-        TypeToken<Map<String,String>> mapOfString = CodecUtils.mapOf(String.class, String.class);
-        Type type = mapOfString.getType();
-        if(type instanceof ParameterizedType) {
-            ParameterizedType pType = (ParameterizedType)type;
-            Type[] types = pType.getActualTypeArguments();
-            if(types.length == 2) {
-                TypeToken valueType = TypeToken.of(types[1]);
-                resolved = valueType.getRawType().equals(String.class);
-            }
-        }
-
-        if(!resolved) {
-            logger.warn("Detected Guava Issue #1635 which indicates that a version of Guava less than 16.01 is in use.  "
-                + "This may introduce codec resolution issues in the driver, please upgrade to Guava 16.01 or later.");
-        }
-    }
-
     @SuppressWarnings("unchecked")
     private static final ImmutableSet<TypeCodec<?>> PRIMITIVE_CODECS = ImmutableSet.of(
         TypeCodec.blob(),

@@ -1,5 +1,11 @@
 ## Changelog
 
+### 3.0.0-beta1 [in progress]
+
+- [improvement] Log a warning when an older version of guava (<16.01) is 
+  found (JAVA-961)
+
+
 ### 3.0.0-alpha4
 
 - [improvement] Change default consistency level to LOCAL_QUORUM (JAVA-926)
