@@ -13,7 +13,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  */
-package com.datastax.driver.core;
+package com.datastax.driver.extras.codecs;
 
 import java.nio.ByteBuffer;
 
@@ -24,8 +24,12 @@ import com.datastax.driver.core.TypeCodec;
 import com.datastax.driver.core.exceptions.InvalidTypeException;
 
 /**
- * This class is a copy of MappingCodec declared in the extras module,
- * to avoid circular dependencies between Maven modules.
+ * An abstract TypeCodec that maps a Java Pojo to another Java object
+ * that can in turn be serialized into a CQL type.
+ * This can serve as a base for libraries dealing with Pojo mappings.
+ *
+ * @param <O> The "outer" (user-facing) Java type
+ * @param <I> The "inner" (Cassandra-facing) Java type
  */
 public abstract class MappingCodec<O, I> extends TypeCodec<O> {
 
