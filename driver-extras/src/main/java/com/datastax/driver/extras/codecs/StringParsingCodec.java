@@ -1,9 +1,3 @@
-package com.datastax.driver.core;
-
-import java.nio.ByteBuffer;
-
-import com.google.common.reflect.TypeToken;
-
 /*
  *      Copyright (C) 2012-2015 DataStax Inc.
  *
@@ -19,11 +13,30 @@ import com.google.common.reflect.TypeToken;
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  */
+package com.datastax.driver.extras.codecs;
+
+import java.nio.ByteBuffer;
+
+import com.google.common.reflect.TypeToken;
+
+import com.datastax.driver.core.ProtocolVersion;
+import com.datastax.driver.core.TypeCodec;
 import com.datastax.driver.core.exceptions.InvalidTypeException;
 
 /**
- * An abstract TypeCodec that actually stores objects as serialized strings.
+ * An abstract TypeCodec that stores JAVA objects as serialized strings.
  * This can serve as a base for codecs dealing with XML or JSON formats.
+ * <p>
+ * This codec can be seen as a convenience base class to help
+ * implementing Java-to-XML or Java-to-JSON mappings, but it comes
+ * with a performance penalty: because each Java object is serialized
+ * to a String first, and only then this String is serialized to a ByteBuffer,
+ * this means that each serialization actually incurs in two potentially
+ * expensive operations being carried.
+ * <p>
+ * If you are using an XML or JSON library that supports writing Java objects
+ * directly to ByteBuffers, consider writing your own codec instead of
+ * using this one.
  *
  * @param <T> The Java type this codec serializes from and deserializes to.
  */
