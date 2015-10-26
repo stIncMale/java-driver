@@ -13,17 +13,20 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  */
-package com.datastax.driver.core;
+package com.datastax.driver.extras.codecs;
 
 import java.util.ArrayList;
 import java.util.Collection;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.common.base.Objects;
 import com.google.common.collect.Lists;
 import org.testng.annotations.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.datastax.driver.core.TypeCodecTest.User;
+import com.datastax.driver.core.*;
 import com.datastax.driver.core.querybuilder.BuiltStatement;
 import com.datastax.driver.core.querybuilder.QueryBuilder;
 import com.datastax.driver.core.utils.CassandraVersion;
@@ -31,9 +34,9 @@ import com.datastax.driver.core.utils.CassandraVersion;
 import static com.datastax.driver.core.querybuilder.QueryBuilder.bindMarker;
 import static com.datastax.driver.core.querybuilder.QueryBuilder.eq;
 
-public class TypeCodecJsonIntegrationTest extends CCMBridge.PerClassSingleNodeCluster {
+public class JacksonJsonCodecTest extends CCMBridge.PerClassSingleNodeCluster {
 
-    private static final JsonCodec<User> jsonCodec = new JsonCodec<User>(User.class);
+    private static final JacksonJsonCodec<User> jsonCodec = new JacksonJsonCodec<>(User.class);
 
     private static final User alice = new User(1, "Alice");
     private static final User bob = new User(2, "Bob");
@@ -62,6 +65,17 @@ public class TypeCodecJsonIntegrationTest extends CCMBridge.PerClassSingleNodeCl
         return builder.withCodecRegistry(
             new CodecRegistry().register(jsonCodec) // global User <-> varchar codec
         );
+    }
+
+    @Test(groups = "unit")
+    public void test_cql_text_to_json() {
+        JacksonJsonCodec<User> codec = new JacksonJsonCodec<>(User.class);
+        // the codec is expected to format json objects as json strings enclosed in single quotes,
+        // as it is required for CQL literals of varchar type.
+        String json = "'{\"id\":1,\"name\":\"John Doe\"}'";
+        User user = new User(1, "John Doe");
+        assertThat(codec.format(user)).isEqualTo(json);
+        assertThat(codec.parse(json)).isEqualToComparingFieldByField(user);
     }
 
     @Test(groups = "short")
@@ -150,5 +164,51 @@ public class TypeCodecJsonIntegrationTest extends CCMBridge.PerClassSingleNodeCl
         assertThat(row.getList(2, User.class)).containsExactly(bob, charlie);
         // we still can get the column as a List<String>
         assertThat(row.getList(2, String.class)).containsExactly(bobJson, charlieJson);
+    }
+
+    @SuppressWarnings("unused")
+    public static class User {
+
+        private int id;
+
+        private String name;
+
+        @JsonCreator
+        public User(@JsonProperty("id") int id, @JsonProperty("name") String name) {
+            this.id = id;
+            this.name = name;
+        }
+
+        public int getId() {
+            return id;
+        }
+
+        public void setId(int id) {
+            this.id = id;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o)
+                return true;
+            if (o == null || getClass() != o.getClass())
+                return false;
+            User user = (User)o;
+            return Objects.equal(id, user.id) &&
+                Objects.equal(name, user.name);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(id, name);
+        }
     }
 }

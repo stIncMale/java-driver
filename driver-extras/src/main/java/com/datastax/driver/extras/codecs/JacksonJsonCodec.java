@@ -13,7 +13,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  */
-package com.datastax.driver.core;
+package com.datastax.driver.extras.codecs;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -23,17 +23,21 @@ import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.type.TypeFactory;
 
+import com.datastax.driver.core.DataType;
+import com.datastax.driver.core.ProtocolVersion;
+import com.datastax.driver.core.TypeCodec;
 import com.datastax.driver.core.exceptions.InvalidTypeException;
 import com.datastax.driver.core.utils.Bytes;
 
 /**
- * A simple Json codec for TypeCodec tests that uses Jackson to perform serialization and deserialization.
+ * A Json codec that uses the <a href="http://wiki.fasterxml.com/JacksonHome">Jackson</a>
+ * library to perform serialization and deserialization of Json structures.
  */
-public class JsonCodec<T> extends TypeCodec<T> {
+public class JacksonJsonCodec<T> extends TypeCodec<T> {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public JsonCodec(Class<T> javaType) {
+    public JacksonJsonCodec(Class<T> javaType) {
         super(DataType.varchar(), javaType);
     }
 
@@ -88,6 +92,11 @@ public class JsonCodec<T> extends TypeCodec<T> {
         }
     }
 
+    /**
+     * This method acts as a bridge between Guava's {@link com.google.common.reflect.TypeToken TypeToken} API, which is used
+     * by the driver, and Jackson's {@link JavaType} API.
+     * @return A {@link JavaType} instance corresponding to the codec's {@link #getJavaType() Java type}.
+     */
     protected JavaType toJacksonJavaType() {
         return TypeFactory.defaultInstance().constructType(getJavaType().getType());
     }
