@@ -13,7 +13,7 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  */
-package com.datastax.driver.core;
+package com.datastax.driver.extras.codecs;
 
 import java.util.Collection;
 import java.util.List;
@@ -29,23 +29,23 @@ import static com.google.common.collect.Lists.newArrayList;
 import static com.google.common.collect.Sets.newHashSet;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.datastax.driver.core.*;
 import com.datastax.driver.core.utils.CassandraVersion;
 
 import static com.datastax.driver.core.DataType.cint;
 import static com.datastax.driver.core.DataType.text;
-import static com.datastax.driver.core.TypeCodecEnumIntegrationTest.Foo.*;
-import static com.datastax.driver.core.TypeCodecEnumIntegrationTest.Bar.*;
+import static com.datastax.driver.extras.codecs.EnumCodecsTest.Foo.*;
+import static com.datastax.driver.extras.codecs.EnumCodecsTest.Bar.*;
 
 /**
- * A test that validates that Enums are correctly mapped to varchars (with the default EnumStringCodec)
- * or alternatively to ints (with the alternative EnumIntCodec).
+ * A test that validates that Enums are correctly mapped to varchars (with EnumStringCodec)
+ * and ints (with EnumIntCodec).
  * It also validates that both codecs may coexist in the same CodecRegistry.
  */
 @CassandraVersion(major=2.1)
-public class TypeCodecEnumIntegrationTest extends CCMBridge.PerClassSingleNodeCluster {
+public class EnumCodecsTest extends CCMBridge.PerClassSingleNodeCluster {
 
     private final String insertQuery = "INSERT INTO \"myTable\" (pk, foo, foos, bar, bars, foobars, tup, udt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
-
     private final String selectQuery = "SELECT pk, foo, foos, bar, bars, foobars, tup, udt FROM \"myTable\" WHERE pk = ?";
 
     private final int pk = 42;
@@ -80,8 +80,8 @@ public class TypeCodecEnumIntegrationTest extends CCMBridge.PerClassSingleNodeCl
     protected Cluster.Builder configure(Cluster.Builder builder) {
         return builder.withCodecRegistry(
             new CodecRegistry()
-                .register(new EnumIntCodec<Foo>(Foo.class))
-                .register(new EnumStringCodec<Bar>(Bar.class))
+                .register(new EnumCodecs.EnumIntCodec<>(Foo.class))
+                .register(new EnumCodecs.EnumStringCodec<>(Bar.class))
         );
     }
 
