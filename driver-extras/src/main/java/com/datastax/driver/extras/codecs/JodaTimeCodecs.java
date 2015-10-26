@@ -13,26 +13,59 @@
  *   See the License for the specific language governing permissions and
  *   limitations under the License.
  */
-package com.datastax.driver.core;
-
-import org.joda.time.DateTime;
-import org.joda.time.DateTimeZone;
-import org.joda.time.LocalTime;
+package com.datastax.driver.extras.codecs;
 
 import java.util.Date;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import org.joda.time.DateTime;
+import org.joda.time.DateTimeZone;
+import org.joda.time.LocalTime;
+
 import static com.google.common.base.Preconditions.checkArgument;
+
+import com.datastax.driver.core.*;
 
 /**
  * A collection of convenience {@link TypeCodec} instances useful for
- * serializing between CQL types and Joda types like {@link DateTime}.
+ * serializing between CQL types and Joda Time types like {@link DateTime}.
+ * <p>
+ * The codecs in this class provide the following mappings:
+ *
+ * <table summary="Supported Mappings">
+ *     <tr>
+ *         <th>Codec</th>
+ *         <th>CQL type</th>
+ *         <th>Joda Time</th>
+ *     </tr>
+ *     <tr>
+ *         <td>{@link LocalTimeCodec}</td>
+ *         <td>{@link DataType#time() time}</td>
+ *         <td>{@link LocalTime}</td>
+ *     </tr>
+ *     <tr>
+ *         <td>{@link LocalDateCodec}</td>
+ *         <td>{@link DataType#date() date}</td>
+ *         <td>{@link org.joda.time.LocalDate LocalDate}</td>
+ *     </tr>
+ *     <tr>
+ *         <td>{@link DateTimeCodec}</td>
+ *         <td>{@link DataType#timestamp() timestamp}</td>
+ *         <td>{@link DateTime}</td>
+ *     </tr>
+ *     <tr>
+ *         <td>{@link TimeZonePreservingDateTimeCodec}</td>
+ *         <td>{@link TupleType tuple} of ({@link DataType#timestamp() timestamp}, {@link DataType#varchar() varchar})</td>
+ *         <td>{@link DateTime}</td>
+ *     </tr>
+ * </table>
  *
  * These codecs may either be registered individually or they may all
- * be registered via {@link JodaCodecs#withCodecs(CodecRegistry)}.
+ * (with exception to {@link TimeZonePreservingDateTimeCodec})
+ * be registered via {@link JodaTimeCodecs#withJodaTimeCodecs(CodecRegistry)}.
  */
-public class JodaCodecs {
+public abstract class JodaTimeCodecs {
 
     /**
      * <p>
@@ -43,12 +76,12 @@ public class JodaCodecs {
      * @param registry registry to add Codecs to.
      * @return updated registry with codecs.
      */
-    public static CodecRegistry withCodecs(CodecRegistry registry) {
+    public static CodecRegistry withJodaTimeCodecs(CodecRegistry registry) {
         return registry.register(LocalTimeCodec.instance, LocalDateCodec.instance, DateTimeCodec.instance);
     }
 
     /**
-     * {@link TypeCodec} that maps {@link LocalTime} <-> Long representing nanoseconds since midnight
+     * {@link TypeCodec} that maps {@link LocalTime} <-> CQL time (long representing nanoseconds since midnight)
      * allowing the setting and retrieval of <code>time</code> columns as {@link LocalTime}
      * instances.
      *
@@ -60,7 +93,7 @@ public class JodaCodecs {
         public static final LocalTimeCodec instance = new LocalTimeCodec();
 
         private LocalTimeCodec() {
-            super(TypeCodec.time(), LocalTime.class);
+            super(time(), LocalTime.class);
         }
 
         @Override
@@ -89,7 +122,7 @@ public class JodaCodecs {
         public static final LocalDateCodec instance = new LocalDateCodec();
 
         private LocalDateCodec() {
-            super(TypeCodec.date(), org.joda.time.LocalDate.class);
+            super(date(), org.joda.time.LocalDate.class);
         }
 
         @Override
@@ -122,17 +155,17 @@ public class JodaCodecs {
         public static final DateTimeCodec instance = new DateTimeCodec();
 
         private DateTimeCodec() {
-            super(TypeCodec.timestamp(), DateTime.class);
+            super(timestamp(), DateTime.class);
         }
 
         @Override
         protected DateTime deserialize(Date value) {
-            return new DateTime(value);
+            return value == null ? null : new DateTime(value);
         }
 
         @Override
         protected Date serialize(DateTime value) {
-            return value.toDate();
+            return value == null ? null : value.toDate();
         }
     }
 
@@ -171,6 +204,8 @@ public class JodaCodecs {
 
         @Override
         protected DateTime deserialize(TupleValue value) {
+            if (value == null)
+                return null;
             Date date = value.getTimestamp(0);
             String zoneID = value.getString(1);
             return new DateTime(date).withZone(DateTimeZone.forID(zoneID));
@@ -178,11 +213,15 @@ public class JodaCodecs {
 
         @Override
         protected TupleValue serialize(DateTime value) {
-            TupleValue tupleValue = new TupleValue(tupleType);
+            if (value == null)
+                return null;
+            TupleValue tupleValue = tupleType.newValue();
             tupleValue.setTimestamp(0, value.toDate());
             tupleValue.setString(1, value.getZone().getID());
             return tupleValue;
         }
     }
+
+    private JodaTimeCodecs(){}
 
 }
