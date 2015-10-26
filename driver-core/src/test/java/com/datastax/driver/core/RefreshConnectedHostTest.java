@@ -78,6 +78,10 @@ public class RefreshConnectedHostTest {
             assertThat(cluster).host(2)
                                .hasState(State.UP)
                                .isAtDistance(HostDistance.LOCAL);
+
+            // Ensure that the host is added to the Cluster.
+            // In 2.2+ C* does not send an added event until the node is ready so we wait a long time.
+            assertThat(TestUtils.findHostWithin(cluster, 3, Cluster.NEW_NODE_DELAY_SECONDS+1, SECONDS)).isNotNull();
             assertThat(cluster).host(3)
                                .comesUpWithin(Cluster.NEW_NODE_DELAY_SECONDS+1, SECONDS)
                                .isAtDistance(HostDistance.IGNORED);
