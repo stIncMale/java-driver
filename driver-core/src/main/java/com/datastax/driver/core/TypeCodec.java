@@ -1454,24 +1454,21 @@ public abstract class TypeCodec<T> {
 
         @Override
         public ByteBuffer serialize(LocalDate value, ProtocolVersion protocolVersion) {
-            return value == null ? null : IntCodec.instance.serializeNoBoxing(javaToProtocol(value.getDaysSinceEpoch()), protocolVersion);
+            if (value == null)
+                return null;
+            int unsigned = CodecUtils.fromtSignedToUnsignedInt(value.getDaysSinceEpoch());
+            return IntCodec.instance.serializeNoBoxing(unsigned, protocolVersion);
         }
 
         @Override
         public LocalDate deserialize(ByteBuffer bytes, ProtocolVersion protocolVersion) {
-            return bytes == null || bytes.remaining() == 0 ? null : LocalDate.fromDaysSinceEpoch(protocolToJava(IntCodec.instance.deserializeNoBoxing(bytes, protocolVersion)));
+            if (bytes == null || bytes.remaining() == 0)
+                return null;
+            int unsigned = IntCodec.instance.deserializeNoBoxing(bytes, protocolVersion);
+            int signed = CodecUtils.fromUnsignedToSignedInt(unsigned);
+            return LocalDate.fromDaysSinceEpoch(signed);
         }
 
-        // The protocol encodes DATE as an _unsigned_ int with the epoch in the middle of the range (2^31).
-        // We read this with ByteBuffer#getInt which expects a signed int, and we want epoch at 0.
-        // These two methods handle the conversions.
-        private static int protocolToJava(int p) {
-            return p + Integer.MIN_VALUE; // this relies on overflow for "negative" values
-        }
-
-        private static int javaToProtocol(int j) {
-            return j - Integer.MIN_VALUE;
-        }
     }
 
     /**
@@ -1689,10 +1686,10 @@ public abstract class TypeCodec<T> {
                 return newInstance(0);
             try {
                 ByteBuffer input = bytes.duplicate();
-                int n = CodecUtils.readCollectionSize(input, protocolVersion);
+                int n = CodecUtils.readSize(input, protocolVersion);
                 C coll = newInstance(n);
                 for (int i = 0; i < n; i++) {
-                    ByteBuffer databb = CodecUtils.readCollectionValue(input, protocolVersion);
+                    ByteBuffer databb = CodecUtils.readValue(input, protocolVersion);
                     coll.add(eltCodec.deserialize(databb, protocolVersion));
                 }
                 return coll;
@@ -1967,11 +1964,11 @@ public abstract class TypeCodec<T> {
                 return new LinkedHashMap<K, V>(0);
             try {
                 ByteBuffer input = bytes.duplicate();
-                int n = CodecUtils.readCollectionSize(input, protocolVersion);
+                int n = CodecUtils.readSize(input, protocolVersion);
                 Map<K, V> m = new LinkedHashMap<K, V>(n);
                 for (int i = 0; i < n; i++) {
-                    ByteBuffer kbb = CodecUtils.readCollectionValue(input, protocolVersion);
-                    ByteBuffer vbb = CodecUtils.readCollectionValue(input, protocolVersion);
+                    ByteBuffer kbb = CodecUtils.readValue(input, protocolVersion);
+                    ByteBuffer vbb = CodecUtils.readValue(input, protocolVersion);
                     m.put(keyCodec.deserialize(kbb, protocolVersion), valueCodec.deserialize(vbb, protocolVersion));
                 }
                 return m;
