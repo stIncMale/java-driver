@@ -23,10 +23,7 @@ import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.text.ParseException;
-import java.text.ParsePosition;
-import java.text.SimpleDateFormat;
 import java.util.*;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 import com.google.common.collect.ImmutableMap;
@@ -768,46 +765,14 @@ public abstract class TypeCodec<T> {
             if (value.charAt(0) != '\'' || value.charAt(value.length() - 1) != '\'')
                 throw new InvalidTypeException("text or varchar values must be enclosed by single quotes");
 
-            return value.substring(1, value.length() - 1).replace("''", "'");
+            return ParseUtils.unquote(value);
         }
 
         @Override
         public String format(String value) {
             if (value == null)
                 return "NULL";
-            return '\'' + replace(value, '\'', "''") + '\'';
-        }
-
-        // Simple method to replace a single character. String.replace is a bit too
-        // inefficient (see JAVA-67)
-        private static String replace(String text, char search, String replacement) {
-            if (text == null || text.isEmpty())
-                return text;
-
-            int nbMatch = 0;
-            int start = -1;
-            do {
-                start = text.indexOf(search, start + 1);
-                if (start != -1)
-                    ++nbMatch;
-            } while (start != -1);
-
-            if (nbMatch == 0)
-                return text;
-
-            int newLength = text.length() + nbMatch * (replacement.length() - 1);
-            char[] result = new char[newLength];
-            int newIdx = 0;
-            for (int i = 0; i < text.length(); i++) {
-                char c = text.charAt(i);
-                if (c == search) {
-                    for (int r = 0; r < replacement.length(); r++)
-                        result[newIdx++] = replacement.charAt(r);
-                } else {
-                    result[newIdx++] = c;
-                }
-            }
-            return new String(result);
+            return ParseUtils.quote(value);
         }
 
         @Override
@@ -819,7 +784,7 @@ public abstract class TypeCodec<T> {
          * {@inheritDoc}
          *
          * Implementation note: this method treats {@code null}s and empty buffers differently:
-         * the formers are mapped to {@code null}s while the latters are mappend to empty strings.
+         * the formers are mapped to {@code null}s while the latters are mapped to empty strings.
          */
         @Override
         public String deserialize(ByteBuffer bytes, ProtocolVersion protocolVersion) {
@@ -1393,64 +1358,21 @@ public abstract class TypeCodec<T> {
      */
     private static class TimestampCodec extends TypeCodec<Date> {
 
-        private static final String[] iso8601Patterns = new String[]{
-            "yyyy-MM-dd HH:mm",
-            "yyyy-MM-dd HH:mm:ss",
-            "yyyy-MM-dd HH:mmZ",
-            "yyyy-MM-dd HH:mm:ssZ",
-            "yyyy-MM-dd HH:mm:ss.SSS",
-            "yyyy-MM-dd HH:mm:ss.SSSZ",
-            "yyyy-MM-dd'T'HH:mm",
-            "yyyy-MM-dd'T'HH:mmZ",
-            "yyyy-MM-dd'T'HH:mm:ss",
-            "yyyy-MM-dd'T'HH:mm:ssZ",
-            "yyyy-MM-dd'T'HH:mm:ss.SSS",
-            "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
-            "yyyy-MM-dd",
-            "yyyy-MM-ddZ"
-        };
-
         private static final TimestampCodec instance = new TimestampCodec();
-
-        private static final Pattern IS_LONG_PATTERN = Pattern.compile("^-?\\d+$");
 
         private TimestampCodec() {
             super(DataType.timestamp(), Date.class);
-        }
-
-        /*
-         * Copied and adapted from apache commons DateUtils.parseStrictly method (that is used Cassandra side
-         * to parse date strings). It is copied here so as to not create a dependency on apache commons "just
-         * for this".
-         */
-        private static Date parseDate(String str, final String[] parsePatterns) throws ParseException {
-            SimpleDateFormat parser = new SimpleDateFormat();
-            parser.setLenient(false);
-
-            ParsePosition pos = new ParsePosition(0);
-            for (String parsePattern : parsePatterns) {
-
-                parser.applyPattern(parsePattern);
-                pos.setIndex(0);
-
-                Date date = parser.parse(str, pos);
-                if (date != null && pos.getIndex() == str.length()) {
-                    return date;
-                }
-            }
-            throw new ParseException("Unable to parse the date: " + str, -1);
         }
 
         @Override
         public Date parse(String value) {
             if (value == null || value.isEmpty() || value.equals("NULL"))
                 return null;
-
             // strip enclosing single quotes, if any
             if (value.charAt(0) == '\'' && value.charAt(value.length() - 1) == '\'')
-                value = value.substring(1, value.length() - 1);
+                value = ParseUtils.unquote(value);
 
-            if (IS_LONG_PATTERN.matcher(value).matches()) {
+            if (ParseUtils.isLongLiteral(value)) {
                 try {
                     return new Date(Long.parseLong(value));
                 } catch (NumberFormatException e) {
@@ -1459,7 +1381,7 @@ public abstract class TypeCodec<T> {
             }
 
             try {
-                return parseDate(value, iso8601Patterns);
+                return ParseUtils.parseDate(value);
             } catch (ParseException e) {
                 throw new InvalidTypeException(String.format("Cannot parse timestamp value from \"%s\"", value));
             }
@@ -1490,10 +1412,7 @@ public abstract class TypeCodec<T> {
 
         private static final DateCodec instance = new DateCodec();
 
-        private static final Pattern IS_LONG_PATTERN = Pattern.compile("^-?\\d+$");
         private static final String pattern = "yyyy-MM-dd";
-        private static final long MAX_LONG_VALUE = (1L << 32) - 1;
-        private static final long EPOCH_AS_CQL_LONG = (1L << 31);
 
         private DateCodec() {
             super(DataType.date(), LocalDate.class);
@@ -1504,40 +1423,26 @@ public abstract class TypeCodec<T> {
             if (value == null || value.isEmpty() || value.equals("NULL"))
                 return null;
 
-            // strip enclosing single quotes, if any
             // single quotes are optional for long literals, mandatory for date patterns
+            // strip enclosing single quotes, if any
             if (value.charAt(0) == '\'' && value.charAt(value.length() - 1) == '\'')
-                value = value.substring(1, value.length() - 1);
+                value = ParseUtils.unquote(value);
 
-            if (IS_LONG_PATTERN.matcher(value).matches()) {
-                // In CQL, numeric DATE literals are longs between 0 and 2^32 - 1, with the epoch in the middle,
-                // so parse it as a long and re-center at 0
-                long cqlLong;
+            if (ParseUtils.isLongLiteral(value)) {
                 try {
-                    cqlLong = Long.parseLong(value);
-                } catch (NumberFormatException e) {
+                    int days = ParseUtils.parseDaysSinceEpoch(value);
+                    return LocalDate.fromDaysSinceEpoch(days);
+                } catch (ParseException e) {
                     throw new InvalidTypeException(String.format("Cannot parse date value from \"%s\"", value));
                 }
-                if (cqlLong < 0 || cqlLong > MAX_LONG_VALUE)
-                    throw new InvalidTypeException(String.format("Numeric literals for DATE must be between 0 and %d (got %d)",
-                        MAX_LONG_VALUE, cqlLong));
-
-                int days = (int)(cqlLong - EPOCH_AS_CQL_LONG);
-
-                return LocalDate.fromDaysSinceEpoch(days);
             }
 
-            SimpleDateFormat parser = new SimpleDateFormat(pattern);
-            parser.setLenient(false);
-            parser.setTimeZone(TimeZone.getTimeZone("UTC"));
-
-            ParsePosition pos = new ParsePosition(0);
-            Date date = parser.parse(value, pos);
-            if (date != null && pos.getIndex() == value.length()) {
+            try {
+                Date date = ParseUtils.parseDate(value, pattern);
                 return LocalDate.fromMillisSinceEpoch(date.getTime());
+            } catch (ParseException e) {
+                throw new InvalidTypeException(String.format("Cannot parse date value from \"%s\"", value));
             }
-
-            throw new InvalidTypeException(String.format("Cannot parse date value from \"%s\"", value));
         }
 
         @Override
@@ -1574,73 +1479,10 @@ public abstract class TypeCodec<T> {
      */
     private static class TimeCodec extends LongCodec {
 
-        private static final Pattern IS_LONG_PATTERN = Pattern.compile("^-?\\d+$");
-
         private static final TimeCodec instance = new TimeCodec();
 
         private TimeCodec() {
             super(DataType.time());
-        }
-
-        // Time specific parsing loosely based on java.sql.Timestamp
-        private static Long parseTime(String s) throws IllegalArgumentException {
-            String nanos_s;
-
-            long hour;
-            long minute;
-            long second;
-            long a_nanos = 0;
-
-            String formatError = "Timestamp format must be hh:mm:ss[.fffffffff]";
-            String zeros = "000000000";
-
-            if (s == null)
-                throw new java.lang.IllegalArgumentException(formatError);
-            s = s.trim();
-
-            // Parse the time
-            int firstColon = s.indexOf(':');
-            int secondColon = s.indexOf(':', firstColon + 1);
-
-            // Convert the time; default missing nanos
-            if (firstColon > 0 && secondColon > 0 && secondColon < s.length() - 1) {
-                int period = s.indexOf('.', secondColon + 1);
-                hour = Integer.parseInt(s.substring(0, firstColon));
-                if (hour < 0 || hour >= 24)
-                    throw new IllegalArgumentException("Hour out of bounds.");
-
-                minute = Integer.parseInt(s.substring(firstColon + 1, secondColon));
-                if (minute < 0 || minute >= 60)
-                    throw new IllegalArgumentException("Minute out of bounds.");
-
-                if (period > 0 && period < s.length() - 1) {
-                    second = Integer.parseInt(s.substring(secondColon + 1, period));
-                    if (second < 0 || second >= 60)
-                        throw new IllegalArgumentException("Second out of bounds.");
-
-                    nanos_s = s.substring(period + 1);
-                    if (nanos_s.length() > 9)
-                        throw new IllegalArgumentException(formatError);
-                    if (!Character.isDigit(nanos_s.charAt(0)))
-                        throw new IllegalArgumentException(formatError);
-                    nanos_s = nanos_s + zeros.substring(0, 9 - nanos_s.length());
-                    a_nanos = Integer.parseInt(nanos_s);
-                } else if (period > 0)
-                    throw new IllegalArgumentException(formatError);
-                else {
-                    second = Integer.parseInt(s.substring(secondColon + 1));
-                    if (second < 0 || second >= 60)
-                        throw new IllegalArgumentException("Second out of bounds.");
-                }
-            } else
-                throw new IllegalArgumentException(formatError);
-
-            long rawTime = 0;
-            rawTime += TimeUnit.HOURS.toNanos(hour);
-            rawTime += TimeUnit.MINUTES.toNanos(minute);
-            rawTime += TimeUnit.SECONDS.toNanos(second);
-            rawTime += a_nanos;
-            return rawTime;
         }
 
         @Override
@@ -1653,7 +1495,7 @@ public abstract class TypeCodec<T> {
                 throw new InvalidTypeException("time values must be enclosed by single quotes");
             value = value.substring(1, value.length() - 1);
 
-            if (IS_LONG_PATTERN.matcher(value).matches()) {
+            if (ParseUtils.isLongLiteral(value)) {
                 try {
                     return Long.parseLong(value);
                 } catch (NumberFormatException e) {
@@ -1662,7 +1504,7 @@ public abstract class TypeCodec<T> {
             }
 
             try {
-                return parseTime(value);
+                return ParseUtils.parseTime(value);
             } catch (IllegalArgumentException e) {
                 throw new InvalidTypeException(String.format("Cannot parse time value from \"%s\"", value));
             }
@@ -1672,33 +1514,7 @@ public abstract class TypeCodec<T> {
         public String format(Long value) {
             if (value == null)
                 return "NULL";
-            int nano = (int)(value % 1000000000);
-            value -= nano;
-            value /= 1000000000;
-            int seconds = (int)(value % 60);
-            value -= seconds;
-            value /= 60;
-            int minutes = (int)(value % 60);
-            value -= minutes;
-            value /= 60;
-            int hours = (int)(value % 24);
-            value -= hours;
-            value /= 24;
-            assert (value == 0);
-            StringBuilder sb = new StringBuilder("'");
-            leftPadZeros(hours, 2, sb);
-            sb.append(":");
-            leftPadZeros(minutes, 2, sb);
-            sb.append(":");
-            leftPadZeros(seconds, 2, sb);
-            sb.append(".");
-            leftPadZeros(nano, 9, sb);
-            sb.append("'");
-            return sb.toString();
-        }
-
-        private static void leftPadZeros(int value, int digits, StringBuilder sb) {
-            sb.append(String.format("%0" + digits + "d", value));
+            return ParseUtils.formatTime(value);
         }
 
     }
