@@ -148,7 +148,7 @@
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>clirr-maven-plugin</artifactId>
-        <version>2.6.1</version>
+        <version>2.7</version>
         <executions>
           <execution>
             <phase>compile</phase>
@@ -168,6 +168,19 @@
             <exclude>com/datastax/driver/core/Connection$*</exclude>
           </excludes>
         </configuration>
+        <!--
+        Workaround to make clirr plugin work with Java 8.
+        The bug is actually in the BCEL library,
+        see https://issues.apache.org/jira/browse/BCEL-173.
+        See also https://github.com/RichardWarburton/lambda-behave/issues/31#issuecomment-86052095
+        -->
+        <dependencies>
+          <dependency>
+            <groupId>com.google.code.findbugs</groupId>
+            <artifactId>bcel-findbugs</artifactId>
+            <version>6.0</version>
+          </dependency>
+        </dependencies>
       </plugin>
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
